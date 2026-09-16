@@ -1,7 +1,7 @@
 # APIs & Data Model
 
 The brief asks to **"define or amend the APIs involved."** The existing document
-APIs are unchanged; I add two new resources ó **subscriptions** and **reports** ó
+APIs are unchanged; I add two new resources ù **subscriptions** and **reports** ù
 and deliberately reuse the existing `GET /{id}/file` download idiom for
 consistency.
 
@@ -17,7 +17,7 @@ consistency.
 
 ---
 
-## New API ó Subscriptions
+## New API ù Subscriptions
 
 ### `POST /api/report-subscriptions`
 Create a subscription.
@@ -48,10 +48,62 @@ Soft-delete ? `active=false`, retained for audit.
 
 ---
 
-## New API ó Reports (generated instances)
+## New API ù Reports (generated instances)
 
-### `GET /api/reports?subscriptionId=&status=&period=`
-List generated reports (paginated).
+### `GET /api/reports`
+List generated reports. **Filters** select *which* reports; **pagination**
+controls *how many* are returned per call. The two are orthogonal.
+
+**Filters (the `WHERE`)**
+
+| Param | Meaning | Result |
+|-------|---------|--------|
+| `subscriptionId` | Reports for one subscription | narrows |
+| `status` | `queued` \| `processing` \| `rendering` \| `ready` \| `failed` | narrows |
+| `period` | A single canonical window as an **ISO week** token, e.g. `2026-W37` (deterministically maps to `{start,end}`). | exact ó `(subscriptionId, period)` is the report's natural key ? **1 report** |
+| `periodFrom` / `periodTo` | A **range** over many windows (ISO dates). Match semantics: return reports whose `period.start` falls within `[periodFrom, periodTo]`. | many ? paginate |
+
+> `period` (exact) and `periodFrom`/`periodTo` (range) are mutually exclusive.
+> Note we do **not** accept a bare date like `period=2026-09-07`: the stored
+> period is a `{start,end}` window, so a single loose date would be ambiguous.
+> A window is identified by its canonical ISO-week token; a span is expressed
+> with the explicit `periodFrom`/`periodTo` pair.
+
+**Pagination (cursor / keyset ó not offset)**
+
+| Param | Meaning |
+|-------|---------|
+| `limit` | Page size (default 20, server-capped e.g. 100) |
+| `cursor` | Opaque token = sort key of the last item seen; omit on first page |
+
+```jsonc
+// GET /api/reports?subscriptionId=sub_abc&status=ready&limit=20
+{
+  "data": [ /* Ö up to 20 reports, newest first Ö */ ],
+  "pagination": {
+    "limit": 20,
+    "hasMore": true,
+    "nextCursor": "eyJyZWFkeUF0IjoiMjAyNi0wOC0zMVQwNToxMTowMFoiLCJpZCI6InJlcF84ODIifQ=="
+  }
+}
+```
+
+The `nextCursor` decodes to the last row's sort key **plus an `_id` tiebreaker**
+(e.g. `{ "readyAt": "2026-08-31T05:11:00Z", "id": "rep_882" }`). Backed by a
+compound index `{ subscriptionId, status, readyAt: -1, _id: -1 }`, so every page
+is a constant-time index seek.
+
+**Why keyset, not `?page=N&offset=`:** the reports collection is append-heavy
+(one report per subscriber per week). Offset paging (a) degrades with large
+`skip()` scans and (b) shifts rows when a weekly run inserts new reports
+mid-pagination, causing duplicates/skips. Keyset is anchored to a stable key, so
+neither happens.
+
+**Exact-lookup examples** (thanks to the natural key, no paging needed):
+```
+GET /api/reports?subscriptionId=sub_abc&period=2026-W37          # ? 1 report
+GET /api/reports?subscriptionId=sub_abc&periodFrom=2026-07-01&periodTo=2026-09-30&limit=20
+```
 
 ### `GET /api/reports/{id}`
 Report metadata + lifecycle status.
@@ -62,7 +114,7 @@ Report metadata + lifecycle status.
   "period": { "start": "2026-09-07", "end": "2026-09-13" },
   "status": "ready",          // queued | processing | rendering | ready | failed
   "sizeBytes": 254118,
-  "md5": "Ö",
+  "md5": "ù",
   "readyAt": "2026-09-14T05:12:03Z",
   "deliveredAt": "2026-09-14T05:12:20Z"
 }
@@ -128,7 +180,7 @@ Indexes: `{ active, "schedule.dayOfWeek", "schedule.hour" }` (planner enumeratio
   "userId": String,
   "region": String,
   "period": { "start": Date, "end": Date },
-  "idempotencyKey": String,    // = hash(subscriptionId, period)  ó UNIQUE
+  "idempotencyKey": String,    // = hash(subscriptionId, period)  ù UNIQUE
   "status": String,            // queued|processing|rendering|ready|failed
   "attempts": Number,
   "fileLocation": String,      // s3 bucket + key (reuses Documents convention)
@@ -141,7 +193,7 @@ Indexes: `{ active, "schedule.dayOfWeek", "schedule.hour" }` (planner enumeratio
 ```
 Unique index on `idempotencyKey` ? the dedup backbone (safe retries, no double report).
 
-### `audit_events` (Postgres ó append-only)
+### `audit_events` (Postgres ù append-only)
 ```sql
 CREATE TABLE audit_events (
   id           BIGSERIAL PRIMARY KEY,
