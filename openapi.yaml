@@ -1,0 +1,356 @@
+openapi: 3.1.0
+info:
+  title: Florence Automated Report API
+  version: 1.0.0
+  description: >
+    HTTP contract for the automated weekly report feature. Subscriptions and
+    generated reports are new resources; the existing `/api/documents` endpoints
+    are unchanged. Report generation is asynchronous: writes return quickly and
+    the report is produced by background workers.
+servers:
+  - url: https://api.florence.example.com
+    description: Region-routed API edge (per-residency backends)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Subscriptions
+  - name: Reports
+
+paths:
+  /api/report-subscriptions:
+    post:
+      tags: [Subscriptions]
+      summary: Create a report subscription
+      description: >
+        Creates a subscription. The requested `scope` is authorized against the
+        caller's entitlements server-side; identity (`userId`, `orgId`, `region`)
+        is derived from the JWT, never the body.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportSubscriptionCreate'
+      responses:
+        '201':
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportSubscription'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    get:
+      tags: [Subscriptions]
+      summary: List subscriptions visible to the caller
+      parameters:
+        - name: studyId
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of subscriptions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionList'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/report-subscriptions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Subscriptions]
+      summary: Fetch one subscription
+      responses:
+        '200':
+          description: The subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportSubscription'
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Subscriptions]
+      summary: Update a subscription
+      description: >
+        Updates mutable fields (schedule, scope, delivery, active). Identity
+        fields (`userId`, `orgId`, `region`) are immutable and cannot be patched.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportSubscriptionUpdate'
+      responses:
+        '200':
+          description: Updated subscription
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportSubscription'
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Subscriptions]
+      summary: Soft-delete (deactivate) a subscription
+      responses:
+        '204':
+          description: Deactivated (active=false); record retained
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/reports:
+    get:
+      tags: [Reports]
+      summary: List generated reports
+      description: >
+        Filters (`subscriptionId`, `status`, `periodFrom`/`periodTo`) select which
+        reports; pagination (`limit`, `cursor`) is keyset/cursor-based, ordered by
+        `period.start`. There is one way to filter by date: the
+        `periodFrom`/`periodTo` range (a single week = both set to that week).
+      parameters:
+        - name: subscriptionId
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ReportStatus' }
+        - name: periodFrom
+          in: query
+          description: Inclusive lower bound matched against report period.start.
+          schema: { type: string, format: date }
+        - name: periodTo
+          in: query
+          description: Inclusive upper bound matched against report period.start.
+          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of reports
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportList'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/reports/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Reports]
+      summary: Get report metadata + lifecycle status
+      responses:
+        '200':
+          description: The report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/reports/{id}/file:
+    parameters:
+      - $ref: '#/components/parameters/Id'
+    get:
+      tags: [Reports]
+      summary: Download the report file
+      description: >
+        Authorizes the caller, then redirects to a short-TTL pre-signed S3 URL.
+        The PDF is never served through the app tier and never emailed.
+      responses:
+        '302':
+          description: Redirect to a short-lived pre-signed S3 URL
+          headers:
+            Location:
+              description: Pre-signed S3 URL (single object, short TTL)
+              schema: { type: string, format: uri }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Auth-issued JWT.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      description: Page size.
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque keyset cursor from a previous page's nextCursor. Omit on first page.
+      schema: { type: string }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Client-supplied key; duplicate submits are de-duplicated.
+      schema: { type: string, format: uuid }
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Authenticated but not authorized for this resource/scope
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Not found (also returned when the caller is not authorized, to avoid leaking existence)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    ReportStatus:
+      type: string
+      enum: [queued, processing, rendering, ready, failed]
+
+    Period:
+      type: object
+      properties:
+        start: { type: string, format: date }
+        end: { type: string, format: date }
+      required: [start, end]
+
+    Schedule:
+      type: object
+      properties:
+        frequency: { type: string, enum: [daily, weekly, monthly] }
+        dayOfWeek: { type: string, enum: [MON, TUE, WED, THU, FRI, SAT, SUN] }
+        hour: { type: integer, minimum: 0, maximum: 23 }
+        timezone: { type: string, description: IANA timezone, example: Europe/Belgrade }
+      required: [frequency, timezone]
+
+    Scope:
+      type: object
+      properties:
+        studyId: { type: string }
+        siteId: { type: string }
+        filters: { type: object, additionalProperties: true }
+
+    Delivery:
+      type: object
+      properties:
+        channel: { type: string, enum: [email] }
+        email: { type: string, format: email }
+      required: [channel, email]
+
+    ReportSubscriptionCreate:
+      type: object
+      properties:
+        reportType: { type: string, example: weekly-site-summary }
+        scope: { $ref: '#/components/schemas/Scope' }
+        schedule: { $ref: '#/components/schemas/Schedule' }
+        delivery: { $ref: '#/components/schemas/Delivery' }
+      required: [reportType, scope, schedule, delivery]
+
+    ReportSubscriptionUpdate:
+      type: object
+      description: Mutable fields only; identity fields cannot be changed.
+      properties:
+        scope: { $ref: '#/components/schemas/Scope' }
+        schedule: { $ref: '#/components/schemas/Schedule' }
+        delivery: { $ref: '#/components/schemas/Delivery' }
+        active: { type: boolean }
+
+    ReportSubscription:
+      type: object
+      properties:
+        id: { type: string, example: sub_abc }
+        userId: { type: string }
+        orgId: { type: string }
+        reportType: { type: string }
+        scope: { $ref: '#/components/schemas/Scope' }
+        schedule: { $ref: '#/components/schemas/Schedule' }
+        nextRunAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Next due time, computed from schedule; used by the scheduler.
+        delivery: { $ref: '#/components/schemas/Delivery' }
+        region: { type: string }
+        active: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Report:
+      type: object
+      properties:
+        id: { type: string, example: rep_789 }
+        subscriptionId: { type: string }
+        userId: { type: string }
+        region: { type: string }
+        period: { $ref: '#/components/schemas/Period' }
+        status: { $ref: '#/components/schemas/ReportStatus' }
+        sizeBytes: { type: integer }
+        md5: { type: string }
+        readyAt: { type: string, format: date-time }
+        deliveredAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+
+    Pagination:
+      type: object
+      properties:
+        limit: { type: integer }
+        hasMore: { type: boolean }
+        nextCursor:
+          type: string
+          nullable: true
+          description: Opaque; pass back as `cursor` to fetch the next page.
+      required: [limit, hasMore]
+
+    ReportList:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Report' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+      required: [data, pagination]
+
+    SubscriptionList:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/ReportSubscription' }
+        pagination: { $ref: '#/components/schemas/Pagination' }
+      required: [data, pagination]
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+          required: [code, message]
+      required: [error]
