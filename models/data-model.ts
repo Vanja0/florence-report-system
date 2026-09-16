@@ -1,8 +1,8 @@
 /**
- * Florence Automated Report feature  data model (storage) + event payloads.
+ * Florence Automated Report feature - data model (storage) + event payloads.
  *
  * This complements openapi.yaml (which is the HTTP contract). Types here describe what is stored
- * (MongoDB collections) and what flows on the async bus (SQS/Kafka)  neither of
+ * (MongoDB collections) and what flows on the async bus (SQS/Kafka) - neither of
  * which OpenAPI is meant to express.
  *
  * Notes:
@@ -41,7 +41,7 @@ export interface Period {
 export interface Schedule {
   frequency: Frequency;
   dayOfWeek?: DayOfWeek; // for weekly
-  hour?: number; // 023, local to `timezone`
+  hour?: number; // 0-23, local to `timezone`
   timezone: string; // IANA, e.g. "Europe/Belgrade"
 }
 
@@ -91,10 +91,10 @@ export interface Report {
   userId: string;
   region: string;
   period: Period;
-  idempotencyKey: string; // = hash(subscriptionId, period)  UNIQUE, internal
+  idempotencyKey: string; // = hash(subscriptionId, period) - UNIQUE, internal
   status: ReportStatus;
   attempts: number;
-  fileLocation: string; // s3 bucket + key  INTERNAL, never exposed via the API
+  fileLocation: string; // s3 bucket + key - INTERNAL, never exposed via the API
   sizeBytes?: number;
   md5?: string; // integrity checksum of the PDF (prefer SHA-256)
   timings?: {
@@ -127,7 +127,7 @@ export interface ImageRef {
  */
 export interface ReportAggregate {
   _id: ObjectId;
-  aggregateKey: string; // = hash(scope, period)  UNIQUE, the shared key
+  aggregateKey: string; // = hash(scope, period) - UNIQUE, the shared key
   scope: Scope; // studyId / siteId this rollup covers
   period: Period; // the window it summarizes
   region: string; // residency boundary
@@ -138,7 +138,7 @@ export interface ReportAggregate {
   /** References to source images to fetch + process at render time (NOT the bytes). */
   imageRefs: ImageRef[];
 
-  // Projection bookkeeping  incremental updates + freshness
+  // Projection bookkeeping - incremental updates + freshness
   sourceCount: number; // how many source records folded in
   version: number; // bumped per incremental update (optimistic concurrency)
   lastSourceAt?: ISODate; // newest source record timestamp included
@@ -148,10 +148,10 @@ export interface ReportAggregate {
 }
 
 // ---------------------------------------------------------------------------
-// Async event payloads (SQS/Kafka)  not part of the HTTP contract
+// Async event payloads (SQS/Kafka) - not part of the HTTP contract
 // ---------------------------------------------------------------------------
 
-/** report.requested  Scheduler -> report workers */
+/** report.requested - Scheduler -> report workers */
 export interface ReportRequested {
   subscriptionId: ObjectId;
   period: Period;
@@ -159,21 +159,21 @@ export interface ReportRequested {
   region: string;
 }
 
-/** report.ready  report worker -> notification worker */
+/** report.ready - report worker -> notification worker */
 export interface ReportReady {
   reportId: ObjectId;
   userId: string;
   fileLocation: string; // internal; consumers fetch via authorized API
 }
 
-/** report.failed  report worker -> ops/alerting */
+/** report.failed - report worker -> ops/alerting */
 export interface ReportFailed {
   reportId: ObjectId;
   attempt: number;
   error: string;
 }
 
-/** report.delivered  notification worker -> delivery status store */
+/** report.delivered - notification worker -> delivery status store */
 export interface ReportDelivered {
   reportId: ObjectId;
   messageId: string; // SES message id
