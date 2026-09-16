@@ -60,16 +60,16 @@ controls *how many* are returned per call. The two are orthogonal.
 |-------|---------|--------|
 | `subscriptionId` | Reports for one subscription | narrows |
 | `status` | `queued` \| `processing` \| `rendering` \| `ready` \| `failed` | narrows |
-| `period` | A single canonical window as an **ISO week** token, e.g. `2026-W37` (deterministically maps to `{start,end}`). | exact ó `(subscriptionId, period)` is the report's natural key ? **1 report** |
-| `periodFrom` / `periodTo` | A **range** over many windows (ISO dates). Match semantics: return reports whose `period.start` falls within `[periodFrom, periodTo]`. | many ? paginate |
+| `periodFrom` / `periodTo` | Date range (ISO dates). Match semantics: return reports whose `period.start` falls within `[periodFrom, periodTo]`. | many -> paginate |
 
-> `period` (exact) and `periodFrom`/`periodTo` (range) are mutually exclusive.
-> Note we do **not** accept a bare date like `period=2026-09-07`: the stored
-> period is a `{start,end}` window, so a single loose date would be ambiguous.
-> A window is identified by its canonical ISO-week token; a span is expressed
-> with the explicit `periodFrom`/`periodTo` pair.
+> There is **one** way to filter by date: the `periodFrom`/`periodTo` range.
+> A single week is just both bounds set to that week
+> (`periodFrom=2026-09-07&periodTo=2026-09-13`). To fetch a report you already
+> know, use `GET /api/reports/{id}` -- no date filtering needed. We deliberately
+> avoid a bare `period=2026-09-07`, because the stored period is a `{start,end}`
+> window and a single loose date would be ambiguous.
 
-**Pagination (cursor / keyset ó not offset)**
+**Pagination (cursor / keyset ù not offset)**
 
 | Param | Meaning |
 |-------|---------|
@@ -79,7 +79,7 @@ controls *how many* are returned per call. The two are orthogonal.
 ```jsonc
 // GET /api/reports?subscriptionId=sub_abc&status=ready&limit=20
 {
-  "data": [ /* Ö up to 20 reports, newest first Ö */ ],
+  "data": [ /* ù up to 20 reports, newest first ù */ ],
   "pagination": {
     "limit": 20,
     "hasMore": true,
@@ -99,10 +99,11 @@ is a constant-time index seek.
 mid-pagination, causing duplicates/skips. Keyset is anchored to a stable key, so
 neither happens.
 
-**Exact-lookup examples** (thanks to the natural key, no paging needed):
+**Examples:**
 ```
-GET /api/reports?subscriptionId=sub_abc&period=2026-W37          # ? 1 report
-GET /api/reports?subscriptionId=sub_abc&periodFrom=2026-07-01&periodTo=2026-09-30&limit=20
+GET /api/reports/{id}                                              # one known report, no filters
+GET /api/reports?subscriptionId=sub_abc&periodFrom=2026-09-07&periodTo=2026-09-13   # one week
+GET /api/reports?subscriptionId=sub_abc&periodFrom=2026-07-01&periodTo=2026-09-30&limit=20  # a quarter, paginated
 ```
 
 ### `GET /api/reports/{id}`
