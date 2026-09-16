@@ -79,19 +79,37 @@ controls *how many* are returned per call. The two are orthogonal.
 ```jsonc
 // GET /api/reports?subscriptionId=sub_abc&status=ready&limit=20
 {
-  "data": [ /* ù up to 20 reports, newest first ù */ ],
+  "data": [ /* up to 20 reports, ordered by period covered (newest week first) */ ],
   "pagination": {
     "limit": 20,
     "hasMore": true,
-    "nextCursor": "eyJyZWFkeUF0IjoiMjAyNi0wOC0zMVQwNToxMTowMFoiLCJpZCI6InJlcF84ODIifQ=="
+    // opaque; decodes to { "period.start": "2026-08-31", "id": "rep_882" }
+    "nextCursor": "eyJwZXJpb2Quc3RhcnQiOiIyMDI2LTA4LTMxIiwiaWQiOiJyZXBfODgyIn0="
   }
 }
 ```
 
 The `nextCursor` decodes to the last row's sort key **plus an `_id` tiebreaker**
-(e.g. `{ "readyAt": "2026-08-31T05:11:00Z", "id": "rep_882" }`). Backed by a
-compound index `{ subscriptionId, status, readyAt: -1, _id: -1 }`, so every page
-is a constant-time index seek.
+(e.g. `{ "period.start": "2026-08-31", "id": "rep_882" }`). Results are ordered
+by `period.start` (which week the report covers), backed by a compound index:
+
+```js
+db.reports.createIndex({ subscriptionId: 1, status: 1, "period.start": -1, _id: -1 })
+```
+
+so every page is a constant-time index seek.
+
+**Sort on the same field you range on (ESR).** The date filter is a *range* on
+`period.start`, so we also *sort and cursor* on `period.start` ù not on a
+different field like `readyAt`. Mongo's ESR rule (Equality ? Sort ? Range) means
+that if the range field and sort field differ, the index can't serve both and
+Mongo does an in-memory `SORT` stage that degrades on large result sets (and
+hits the 32 MB sort limit). Because the index is physically ordered by
+`period.start`, a range scan on it comes out already sorted ù filter, range,
+sort, and pagination are all served by the one index, no `SORT` stage.
+`readyAt` and `period.start` are near-perfectly correlated for weekly reports,
+so ordering by `period.start` is also what the user expects. Verify with
+`explain()`: expect an `IXSCAN` and **no** `SORT`.
 
 **Why keyset, not `?page=N&offset=`:** the reports collection is append-heavy
 (one report per subscriber per week). Offset paging (a) degrades with large
@@ -192,7 +210,12 @@ Indexes: `{ active, "schedule.dayOfWeek", "schedule.hour" }` (planner enumeratio
   "createdAt": Date, "readyAt": Date, "deliveredAt": Date
 }
 ```
-Unique index on `idempotencyKey` ? the dedup backbone (safe retries, no double report).
+Indexes:
+- Unique index on `idempotencyKey` ó the dedup backbone (safe retries, no double report).
+- `{ subscriptionId: 1, status: 1, "period.start": -1, _id: -1 }` ó serves the
+  `GET /api/reports` list: equality on `subscriptionId`/`status`, range on
+  `period.start`, and sort/keyset-pagination on `period.start` from the one
+  index (ESR-aligned, no in-memory `SORT`).
 
 ### `audit_events` (Postgres ù append-only)
 ```sql
