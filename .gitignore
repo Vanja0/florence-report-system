@@ -1,3 +1,17 @@
-node_modules/
+# macOS
 .DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Editor
+.vscode/
+.idea/
+
+# Logs
 *.log
+
+# Local notes, not part of the submission
+docs/
